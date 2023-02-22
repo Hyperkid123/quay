@@ -1,8 +1,13 @@
 const path = require('path');
-const DynamicRemotePlugin = require('@openshift/dynamic-plugin-sdk-webpack').DynamicRemotePlugin;
+const DynamicRemotePlugin =
+  require('@openshift/dynamic-plugin-sdk-webpack').DynamicRemotePlugin;
 const CSSMinimizerPlugin = require('css-minimizer-webpack-plugin');
 const webpack = require('webpack');
 const TsconfigPathsPlugin = require('tsconfig-paths-webpack-plugin');
+
+// HCC development proxy
+const proxy = require('@redhat-cloud-services/frontend-components-config-utilities/proxy');
+const fs = require('fs');
 
 const BG_IMAGES_DIRNAME = 'assets';
 
@@ -22,12 +27,12 @@ const pathTo = (relativePath) => path.resolve(__dirname, relativePath);
  * @see https://webpack.js.org/plugins/module-federation-plugin/#sharing-hints
  */
 const pluginSharedModules = {
-  '@openshift/dynamic-plugin-sdk': { singleton: true, import: false },
+  '@openshift/dynamic-plugin-sdk': {singleton: true, import: false},
   '@patternfly/react-core': {},
   '@patternfly/react-table': {},
-  react: { singleton: true, import: false },
-  'react-dom': { singleton: true, import: false },
-  'react-router-dom': { singleton: true, import: false },
+  react: {singleton: true, import: false},
+  'react-dom': {singleton: true, import: false},
+  'react-router-dom': {singleton: true, import: false},
 };
 
 const plugins = [
@@ -40,7 +45,9 @@ const plugins = [
   }),
   new DynamicRemotePlugin({
     sharedModules: pluginSharedModules,
-    entryScriptFilename: isProd ? 'plugin-entry.[fullhash].min.js' : 'plugin-entry.js',
+    entryScriptFilename: isProd
+      ? 'plugin-entry.[fullhash].min.js'
+      : 'plugin-entry.js',
   }),
 ];
 
@@ -52,7 +59,9 @@ module.exports = {
     // reflect the CDN public path, TODO: Adjust in the future based on the actual location in HCC
     publicPath: '/apps/quay/',
     chunkFilename: isProd ? 'chunks/[id].[chunkhash].min.js' : 'chunks/[id].js',
-    assetModuleFilename: isProd ? 'assets/[contenthash][ext]' : 'assets/[name][ext]',
+    assetModuleFilename: isProd
+      ? 'assets/[contenthash][ext]'
+      : 'assets/[name][ext]',
   },
   resolve: {
     extensions: ['.ts', '.tsx', '.js', '.jsx'],
@@ -116,7 +125,7 @@ module.exports = {
         // only process SVG modules with this loader if they live under a 'bgimages' directory
         // this is primarily useful when applying a CSS background using an SVG
         include: (input) => input.indexOf(BG_IMAGES_DIRNAME) > -1,
-        type: "asset/inline"
+        type: 'asset/inline',
       },
       {
         test: /\.svg$/i,
@@ -127,7 +136,7 @@ module.exports = {
           input.indexOf('fonts') === -1 &&
           input.indexOf('background-filter') === -1 &&
           input.indexOf('pficon') === -1,
-        type: "asset/resource"
+        type: 'asset/resource',
       },
       {
         test: /\.(jpg|jpeg|png|gif)$/i,
@@ -185,5 +194,60 @@ module.exports = {
       '...', // The '...' string represents the webpack default TerserPlugin instance
       new CSSMinimizerPlugin(),
     ],
+  },
+  devServer: {
+    static: pathTo('dist'),
+    port: 1337,
+    https: true,
+    host: '0.0.0.0',
+    allowedHosts: 'all',
+    // https://github.com/bripkens/connect-history-api-fallback
+    historyApiFallback: {
+      // We should really implement the same logic as cloud-services-config
+      // and only redirect (/beta)?/bundle/app-name to /index.html
+      rewrites: [
+        {from: /^\/api/, to: '/404.html'},
+        {from: /^(\/beta)?\/config/, to: '/404.html'},
+      ],
+      verbose: true,
+      disableDotRule: true,
+    },
+    devMiddleware: {
+      writeToDisk: true,
+    },
+    client: {
+      overlay: false,
+    },
+    ...proxy({
+      localChrome: '/home/martin/insights/insights-chrome/build/',
+      useProxy: true,
+      env: 'stage-stable',
+      port: 1337,
+      appUrl: ['/settings/quay', '/beta/settings/quay'],
+      publicPath: '/apps/quay/',
+      proxyVerbose: true,
+      onBeforeSetupMiddleware: ({chromePath}) => {
+        if (chromePath) {
+          const outputPath = pathTo('dist');
+          const template = fs.readFileSync(`${chromePath}/index.html`, {
+            encoding: 'utf-8',
+          });
+          if (!fs.existsSync(outputPath)) {
+            fs.mkdirSync(outputPath);
+          }
+
+          fs.writeFileSync(`${outputPath}/index.html`, template);
+        }
+      },
+      useDevBuild: true,
+      routes: {
+        '/config/chrome': {
+          host: 'http://localhost:8003',
+        },
+        '/beta/config/chrome': {
+          host: 'http://localhost:8003',
+        },
+      },
+    }),
   },
 };
